@@ -2,23 +2,40 @@
 
 Aplikacja na Androida do lokalnej obróbki zdjęć, w 100% offline: upscaling, wyostrzanie,
 odszumianie, usuwanie znaku wodnego, poprawa twarzy i usuwanie tła. Wnioskowanie leci
-na ONNX Runtime, modele są w APK, nic nie wychodzi do sieci.
+na ONNX Runtime w wariancie QNN, czyli przez Qualcomm AI Engine Direct, więc modele
+liczą się na NPU Hexagon albo na GPU Adreno, a nie na CPU. Nic nie wychodzi do sieci.
 
 ### Pobranie
 
 Gotowy plik `.apk` znajdziesz w zakładce **Releases** tego repozytorium.
-Wymagania: Android 8.0 (API 26) lub nowszy, arm64-v8a.
+Wymagania: Android 8.0 (API 26) lub nowszy, arm64-v8a, układ Qualcomm Snapdragon.
 
 ### Modele w paczce
 
 | funkcja | model | rozmiar | wejście |
 |---|---|---|---|
 | usuwanie tła | IS-Net general-use | 176 MB | 1024×1024 |
-| upscaling, poprawa twarzy | Real-ESRGAN SRVGGNetCompact x4 | 4,9 MB | dowolne |
+| upscaling, poprawa twarzy | Real-ESRGAN SRVGGNetCompact x4 | 4,9 MB | 512×512 (kafelki) |
 
 Znak wodny i filtry (wyostrzanie, odszumianie) liczy OpenCV, bez sieci neuronowej.
 
-### Uwaga techniczna: dlaczego usuwanie tła nie jedzie po NNAPI
+### Jak wybierany jest akcelerator
+
+Sesja ONNX tworzona jest kaskadą: najpierw Hexagon NPU (`backend_type=htp`), potem
+Adreno (`backend_type=gpu`), a CPU dopiero gdy oba odmówią przyjęcia grafu. Dwa pierwsze
+kroki mają ustawione `session.disable_cpu_ep_fallback=1`, więc jeśli QNN nie weźmie
+całego grafu, tworzenie sesji rzuca wyjątkiem zamiast po cichu policzyć na CPU. Udane
+utworzenie sesji jest więc dowodem, że graf poszedł na akcelerator. Model fp32 wchodzi
+na NPU bez kwantyzacji, bo ORT ustawia grafowi precyzję FP16.
+
+Backend, który faktycznie przyjął graf, apka pokazuje w nagłówku po pierwszej inferencji
+i wypisuje do logu:
+
+```
+adb logcat -s AIENHANCER
+```
+
+### Uwaga techniczna: dlaczego nie BiRefNet i nie NNAPI
 
 Wcześniejsza wersja używała BiRefNet massive (972 MB) z akceleracją NNAPI i wywalała się
 przy tworzeniu sesji komunikatem:
@@ -34,11 +51,13 @@ konwolucji deformowalnej dekodera (`dec_att/aspp*/atrous_conv`), więc NNAPI odr
 model, zanim policzy pierwszy piksel. Podmiana wag na inny checkpoint BiRefNet niczego nie
 zmienia, bo topologia grafu jest identyczna.
 
-Obecna wersja liczy usuwanie tła modelem IS-Net na CPU. Pomiar na maszynie x86, 6 wątków,
-wejście 1024×1024: 0,48 s wobec 7,8 s dla BiRefNetu, około 270 MB pamięci wobec około 6 GB.
-Jakość względem BiRefNetu na zdjęciach portretowych: MAE 0,0056 do 0,0118 i IoU 0,987 do 0,990.
+IS-Net ma maksymalną rangę 4 i po optymalizacji ORT redukuje się do 355 węzłów w siedmiu
+typach operacji, które QNN obsługuje w komplecie. Jakość względem BiRefNetu na zdjęciach
+portretowych: MAE od 0,0056 do 0,0118 i IoU od 0,987 do 0,990.
 
-### Licencje modeli
+### Licencje
 
 IS-Net general-use: eksport ONNX na licencji MIT, wagi na Apache-2.0.
 Real-ESRGAN: BSD-3-Clause.
+Biblioteki Qualcomm AI Engine Direct są dystrybuowane wyłącznie jako część APK,
+zgodnie z warunkami AI Stack License.
